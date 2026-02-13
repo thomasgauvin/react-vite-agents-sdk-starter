@@ -1,62 +1,19 @@
-# `@callable()` decorator doesn't work in Vite dev server
+# React + Vite + Cloudflare Workers with Agents SDK
 
-This repo reproduces the issue. Clone it, `npm install`, and run `npm run dev` to see the error.
+A starter template for building React applications with Cloudflare Workers and the Agents SDK, featuring RPC support via `@callable()` decorators.
 
-## Steps to reproduce
+## Setup
 
 1. Clone this repo and `npm install`
-2. Run `npm run dev`
-3. Dev server crashes with:
-   ```
-   error when starting dev server:
-   SyntaxError: Invalid or unexpected token
-       at Object.runInlinedModule (workers/runner-worker.js:1314:35)
-       at CustomModuleRunner.directRequest (workers/runner-worker.js:1166:80)
-       at CustomModuleRunner.cachedRequest (workers/runner-worker.js:1084:73)
-   ```
+2. Run `npm run dev` to start the development server
+3. Run `npm run build` to build for production
 
-## What's happening
+## Key Configuration
 
-The `@callable()` decorator from the agents SDK marks methods as invocable via RPC (e.g. `agent.stub.chat()` from the client). The code in `worker/agents/chat.ts` uses `@callable()` on the `chat` method:
+To support the `@callable()` decorator syntax in both dev and build environments, the TypeScript configuration targets **ES2021**. This ensures proper decorator compilation across Miniflare's V8 runtime and production builds.
 
-```ts
-import { Agent, callable } from "agents";
-
-class ChatAgent extends Agent<Env, ChatAgentState> {
-  @callable()
-  async chat(message: string): Promise<string> {
-    // ...
-  }
-}
-```
-
-`npm run build` (`tsc -b && vite build`) **passes** because TypeScript compiles decorators down to plain JS. But `npm run dev` **crashes** because the Vite dev server runs worker code inside workerd's V8 runtime (via Miniflare), and that V8 version doesn't support TC39 stage 3 decorator syntax. The `@` token is an `Invalid or unexpected token`.
-
-## Expected behavior
-
-`@callable()` should work in dev, since it's the documented way to mark methods as RPC-callable.
-
-## Workaround
-
-Apply `callable()` programmatically after the class definition instead of using `@` syntax:
-
-```ts
-import { Agent, callable } from "agents";
-
-class ChatAgent extends Agent<Env, ChatAgentState> {
-  async chat(message: string): Promise<string> {
-    // ...
-  }
-}
-
-// Register as callable (workerd doesn't support @ decorator syntax yet)
-callable()(
-  ChatAgent.prototype.chat,
-  { kind: "method", name: "chat" } as ClassMethodDecoratorContext
-);
-```
-
-To apply this workaround to this repo: remove the `@callable()` line above `async chat(` in `worker/agents/chat.ts` and add the programmatic registration after the class closing brace.
+- **tsconfig.worker.json**: Targets ES2021 (extends tsconfig.node.json)
+- **tsconfig.app.json**: Targets ES2022 (for the React frontend)
 
 ## Environment
 
