@@ -29,7 +29,3 @@ dist-ssr
 !.dev.vars.example
 .env*
 !.env.example
-
-# agent skills and secrets
-.agents/
-worker/agents/
