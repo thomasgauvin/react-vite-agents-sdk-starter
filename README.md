@@ -1,73 +1,67 @@
-# React + TypeScript + Vite
+# `@callable()` decorator doesn't work in Vite dev server
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This repo reproduces the issue. Clone it, `npm install`, and run `npm run dev` to see the error.
 
-Currently, two official plugins are available:
+## Steps to reproduce
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+1. Clone this repo and `npm install`
+2. Run `npm run dev`
+3. Dev server crashes with:
+   ```
+   error when starting dev server:
+   SyntaxError: Invalid or unexpected token
+       at Object.runInlinedModule (workers/runner-worker.js:1314:35)
+       at CustomModuleRunner.directRequest (workers/runner-worker.js:1166:80)
+       at CustomModuleRunner.cachedRequest (workers/runner-worker.js:1084:73)
+   ```
 
-## React Compiler
+## What's happening
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The `@callable()` decorator from the agents SDK marks methods as invocable via RPC (e.g. `agent.stub.chat()` from the client). The code in `worker/agents/chat.ts` uses `@callable()` on the `chat` method:
 
-## Expanding the ESLint configuration
+```ts
+import { Agent, callable } from "agents";
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+class ChatAgent extends Agent<Env, ChatAgentState> {
+  @callable()
+  async chat(message: string): Promise<string> {
+    // ...
+  }
+}
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`npm run build` (`tsc -b && vite build`) **passes** because TypeScript compiles decorators down to plain JS. But `npm run dev` **crashes** because the Vite dev server runs worker code inside workerd's V8 runtime (via Miniflare), and that V8 version doesn't support TC39 stage 3 decorator syntax. The `@` token is an `Invalid or unexpected token`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Expected behavior
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+`@callable()` should work in dev, since it's the documented way to mark methods as RPC-callable.
+
+## Workaround
+
+Apply `callable()` programmatically after the class definition instead of using `@` syntax:
+
+```ts
+import { Agent, callable } from "agents";
+
+class ChatAgent extends Agent<Env, ChatAgentState> {
+  async chat(message: string): Promise<string> {
+    // ...
+  }
+}
+
+// Register as callable (workerd doesn't support @ decorator syntax yet)
+callable()(
+  ChatAgent.prototype.chat,
+  { kind: "method", name: "chat" } as ClassMethodDecoratorContext
+);
 ```
+
+To apply this workaround to this repo: remove the `@callable()` line above `async chat(` in `worker/agents/chat.ts` and add the programmatic registration after the class closing brace.
+
+## Environment
+
+- `agents@0.4.1`
+- `@cloudflare/vite-plugin@^1.25.0`
+- `wrangler@^4.65.0`
+- `vite@^7.3.1`
+- `typescript@~5.9.3`
